@@ -1,4 +1,5 @@
 const { test, expect } = require('@playwright/test');
+const { noisePng } = require('./support/noisePng');
 
 /**
  * End-to-end tests: real browser -> real Next.js app -> real FastAPI backend.
@@ -114,6 +115,31 @@ test.describe('analysis', () => {
     expect(logged[0].image_data_uri).toBe(
       `data:image/png;base64,${img.buffer.toString('base64')}`
     );
+  });
+
+  test('shrinks a large photo so the upload stays under the 4.5 MB hosting limit', async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const MB = 1024 * 1024;
+    const photo = {
+      name: 'huge-photo.png',
+      mimeType: 'image/png',
+      buffer: noisePng(1800, 1800),
+    };
+    expect(photo.buffer.length).toBeGreaterThan(5 * MB);
+
+    await chooseAndAnalyze(page, photo);
+    await expect(page.getByText('Estimated Total Load')).toBeVisible({ timeout: 60_000 });
+
+    const logged = await (await request.get(`${STUB}/__requests`)).json();
+    expect(logged).toHaveLength(1);
+    const dataUri = logged[0].image_data_uri;
+    expect(dataUri.startsWith('data:image/jpeg;base64,')).toBe(true);
+    const sentBytes = Buffer.from(dataUri.split(',')[1], 'base64').length;
+    expect(sentBytes).toBeLessThanOrEqual(3.5 * MB);
+    expect(sentBytes).toBeLessThan(photo.buffer.length);
   });
 
   test('shows a loading state, blocks double submits, then shows results', async ({ page }) => {

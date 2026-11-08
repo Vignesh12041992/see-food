@@ -4,6 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import Home from '../../app/page';
+import { prepareImage } from '../../app/lib/prepareImage';
+
+// Compression has its own tests (prepareImage.test.js); here it is a pass-through
+// unless a test says otherwise.
+vi.mock('../../app/lib/prepareImage', () => ({
+  prepareImage: vi.fn(),
+}));
 
 const API_URL = 'http://localhost:8000/api/analyze-nutrition';
 
@@ -61,6 +68,8 @@ describe('Home page', () => {
     objectUrlCounter = 0;
     globalThis.URL.createObjectURL = vi.fn(() => `blob:preview-${++objectUrlCounter}`);
     globalThis.fetch = vi.fn();
+    prepareImage.mockReset();
+    prepareImage.mockImplementation(async (file) => file);
   });
 
   afterEach(() => {
@@ -281,6 +290,57 @@ describe('Home page', () => {
       expect(await screen.findByText('Green Salad')).toBeInTheDocument();
       expect(screen.getByText('777')).toBeInTheDocument();
       expect(screen.queryByText('Grilled Chicken')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('large photos', () => {
+    it('uploads the smaller copy returned by the compression step', async () => {
+      const user = userEvent.setup();
+      const original = makeImage('big-photo.png');
+      const compressed = new File(['small'], 'big-photo.jpg', { type: 'image/jpeg' });
+      prepareImage.mockResolvedValueOnce(compressed);
+      fetch.mockResolvedValue(okResponse(SAMPLE_RESULT));
+      const { container } = render(<Home />);
+
+      await user.upload(fileInput(container), original);
+      await user.click(analyzeButton());
+
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      expect(prepareImage).toHaveBeenCalledWith(original);
+      const body = fetch.mock.calls[0][1].body;
+      expect(body.get('file').name).toBe('big-photo.jpg');
+      expect(body.get('file').type).toBe('image/jpeg');
+    });
+
+    it('shows a message and skips the backend when a photo cannot be shrunk enough', async () => {
+      const user = userEvent.setup();
+      prepareImage.mockRejectedValueOnce(
+        new Error('This photo is too large to upload. Please try a smaller photo.')
+      );
+      const { container } = render(<Home />);
+
+      await user.upload(fileInput(container), makeImage());
+      await user.click(analyzeButton());
+
+      expect(
+        await screen.findByText('This photo is too large to upload. Please try a smaller photo.')
+      ).toBeInTheDocument();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(analyzeButton()).toBeEnabled();
+    });
+
+    it('explains an HTTP 413 from the server in plain words', async () => {
+      const user = userEvent.setup();
+      fetch.mockResolvedValue(errorResponse('Request Entity Too Large', 413));
+      const { container } = render(<Home />);
+
+      await user.upload(fileInput(container), makeImage());
+      await user.click(analyzeButton());
+
+      expect(
+        await screen.findByText('This photo is too large for the server. Please try a smaller photo.')
+      ).toBeInTheDocument();
+      expect(analyzeButton()).toBeEnabled();
     });
   });
 

@@ -10,10 +10,26 @@ from typing import List
 
 app = FastAPI(title="AI Nutrition Agent API")
 
-# Enable Next.js Web UI Communication
+DEFAULT_ALLOWED_ORIGINS = "http://localhost:3000"
+
+
+def parse_allowed_origins(raw: str) -> List[str]:
+    """Turn a comma-separated list of origins into a clean list."""
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+# Origins allowed to call this API from a browser or mobile WebView.
+# Set ALLOWED_ORIGINS (comma-separated) to add your deployed web app and the
+# mobile app origins, e.g.:
+#   https://see-food.vercel.app,https://localhost,capacitor://localhost
+ALLOWED_ORIGINS = parse_allowed_origins(
+    os.environ.get("ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
+)
+
+# Enable Next.js Web UI (and mobile app) Communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,6 +38,8 @@ app.add_middleware(
 # OpenRouter Configuration
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Sent to OpenRouter as the HTTP-Referer attribution header.
+APP_URL = os.environ.get("APP_URL", "http://localhost:3000")
 TARGET_MODEL = "google/gemini-2.5-flash:free"  # Free Tier option
 
 class FoodItem(BaseModel):
@@ -87,7 +105,7 @@ async def analyze_nutrition(file: UploadFile = File(...)):
 
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "HTTP-Referer": "http://localhost:3000",
+            "HTTP-Referer": APP_URL,
             "X-Title": "AI Nutrition Agent",
             "Content-Type": "application/json"
         }

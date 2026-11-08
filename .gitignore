@@ -1,0 +1,23 @@
+# Dependencies and build output
+node_modules/
+.next/
+out/
+.venv/
+__pycache__/
+*.pyc
+
+# Local environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Vercel local link folder
+.vercel/
+
+# Test output
+test-results/
+playwright-report/
+.pytest_cache/
+
+# OS files
+.DS_Store

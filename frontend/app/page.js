@@ -2,6 +2,12 @@
 
 import React, { useState } from 'react';
 import { Upload, Sparkles, AlertCircle, Apple } from 'lucide-react';
+import { prepareImage } from './lib/prepareImage';
+import { buildAnalyzeUrl } from './lib/config';
+
+// Where the FastAPI backend lives. Set NEXT_PUBLIC_API_BASE_URL at build time
+// (for example in Vercel's environment variables); defaults to local development.
+const ANALYZE_URL = buildAnalyzeUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 export default function Home() {
     const [image, setImage] = useState(null);
@@ -25,15 +31,20 @@ export default function Home() {
         setLoading(true);
         setError(null);
 
-        const formData = new FormData();
-        formData.append('file', image);
-
         try {
-            const response = await fetch('http://localhost:8000/api/analyze-nutrition', {
+            // Large photos are shrunk first so the upload stays under hosting limits.
+            const upload = await prepareImage(image);
+            const formData = new FormData();
+            formData.append('file', upload);
+
+            const response = await fetch(ANALYZE_URL, {
                 method: 'POST',
                 body: formData,
             });
 
+            if (response.status === 413) {
+                throw new Error('This photo is too large for the server. Please try a smaller photo.');
+            }
             if (!response.ok) {
                 const errText = await response.text();
                 throw new Error(`Server error: ${errText}`);

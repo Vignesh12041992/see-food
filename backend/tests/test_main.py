@@ -403,6 +403,84 @@ def test_actual_response_carries_cors_header_for_frontend_origin(client, upstrea
 
 
 # --------------------------------------------------------------------------- #
+# Configurable CORS origins (web app + mobile app origins)
+# --------------------------------------------------------------------------- #
+def test_default_allowed_origin_is_the_local_frontend():
+    assert main.DEFAULT_ALLOWED_ORIGINS == FRONTEND_ORIGIN
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("http://localhost:3000", ["http://localhost:3000"]),
+        (
+            "https://app.example.com,https://localhost,capacitor://localhost",
+            ["https://app.example.com", "https://localhost", "capacitor://localhost"],
+        ),
+        (" https://a.example.com , https://b.example.com ", ["https://a.example.com", "https://b.example.com"]),
+        ("https://a.example.com,,", ["https://a.example.com"]),
+        ("", []),
+    ],
+)
+def test_parse_allowed_origins(raw, expected):
+    assert main.parse_allowed_origins(raw) == expected
+
+
+@pytest.fixture
+def app_with_origins(monkeypatch):
+    """Reload main with ALLOWED_ORIGINS set, then restore the default app."""
+    import importlib
+
+    def build(origins):
+        monkeypatch.setenv("ALLOWED_ORIGINS", origins)
+        importlib.reload(main)
+        return TestClient(main.app)
+
+    yield build
+
+    monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+    importlib.reload(main)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["https://see-food.example.com", "https://localhost", "capacitor://localhost"],
+)
+def test_origins_from_environment_are_allowed(app_with_origins, origin):
+    client = app_with_origins(
+        "https://see-food.example.com,https://localhost,capacitor://localhost"
+    )
+
+    response = client.options(
+        ENDPOINT,
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_default_origin_is_not_allowed_once_environment_overrides_it(app_with_origins):
+    client = app_with_origins("https://see-food.example.com")
+
+    response = client.options(
+        ENDPOINT,
+        headers={"Origin": FRONTEND_ORIGIN, "Access-Control-Request-Method": "POST"},
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_openrouter_referer_comes_from_app_url(client, upstream, monkeypatch):
+    monkeypatch.setattr(main, "APP_URL", "https://see-food.example.com")
+
+    post_image(client)
+
+    assert upstream.calls[0].headers["HTTP-Referer"] == "https://see-food.example.com"
+
+
+# --------------------------------------------------------------------------- #
 # Pydantic models
 # --------------------------------------------------------------------------- #
 def test_nutrition_analysis_accepts_valid_data():

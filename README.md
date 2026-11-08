@@ -19,11 +19,12 @@ The app has two parts:
 4. [Project structure](#project-structure)
 5. [Getting started](#getting-started)
 6. [Configuration](#configuration)
-7. [API reference](#api-reference)
-8. [Frontend behaviour](#frontend-behaviour)
-9. [Testing](#testing)
-10. [Troubleshooting](#troubleshooting)
-11. [Known limitations](#known-limitations)
+7. [Deploying to Vercel](#deploying-to-vercel)
+8. [API reference](#api-reference)
+9. [Frontend behaviour](#frontend-behaviour)
+10. [Testing](#testing)
+11. [Troubleshooting](#troubleshooting)
+12. [Known limitations](#known-limitations)
 
 ---
 
@@ -75,8 +76,11 @@ sequenceDiagram
 ```
 see-food/
 ├── README.md
+├── .gitignore
 ├── backend/
 │   ├── main.py                 # FastAPI app: routes, schema, OpenRouter call
+│   ├── vercel.json             # Vercel function settings (max duration)
+│   ├── .env.example            # backend environment variables
 │   ├── requirements.txt        # runtime dependencies
 │   ├── requirements-dev.txt    # runtime + pytest
 │   ├── pytest.ini
@@ -87,11 +91,15 @@ see-food/
     ├── app/
     │   ├── layout.js           # root layout, imports global CSS
     │   ├── page.js             # the whole UI (upload, preview, results)
-    │   └── globals.css         # Tailwind directives
+    │   ├── globals.css         # Tailwind directives
+    │   └── lib/
+    │       ├── config.js       # builds the backend URL from NEXT_PUBLIC_API_BASE_URL
+    │       └── prepareImage.js # shrinks large photos before upload
+    ├── .env.example            # frontend environment variables
     ├── tests/
     │   ├── setup.js            # Vitest setup
-    │   ├── unit/page.test.jsx  # component tests
-    │   └── e2e/analyze.spec.js # Playwright end-to-end tests
+    │   ├── unit/               # component, config and image-compression tests
+    │   └── e2e/                # Playwright end-to-end tests
     ├── package.json
     ├── tailwind.config.js
     ├── postcss.config.js
@@ -161,9 +169,41 @@ npm run start      # serves on http://localhost:3000
 | `OPENROUTER_API_KEY` | environment variable | *(none — required)*                               | Without it, the analyze endpoint returns HTTP 500 with a clear message. |
 | `TARGET_MODEL`       | `backend/main.py`    | `google/gemini-2.5-flash:free`                    | Any vision-capable OpenRouter model id. Availability is controlled by OpenRouter. |
 | `OPENROUTER_URL`     | `backend/main.py`    | `https://openrouter.ai/api/v1/chat/completions`   | OpenRouter chat-completions endpoint.                                  |
-| CORS allowed origin  | `backend/main.py`    | `http://localhost:3000`                           | Add your frontend's origin here when deploying elsewhere.             |
-| Backend URL          | `frontend/app/page.js` | `http://localhost:8000/api/analyze-nutrition`   | Hard-coded in the `fetch` call; change it when the API is hosted elsewhere. |
+| `ALLOWED_ORIGINS`    | environment variable (backend) | `http://localhost:3000`                 | Comma-separated list of web origins allowed to call the API (CORS). Add your deployed frontend address. |
+| `APP_URL`            | environment variable (backend) | `http://localhost:3000`                 | Your frontend's public address; sent to OpenRouter as the `HTTP-Referer` attribution header. |
+| `NEXT_PUBLIC_API_BASE_URL` | environment variable (frontend) | `http://localhost:8000`           | Where the backend lives. Read when the frontend is **built**, so redeploy the frontend after changing it. |
 | Upstream timeout     | `backend/main.py`    | 45 seconds                                        | `httpx.AsyncClient(timeout=45.0)`.                                     |
+
+Example files: [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`](frontend/.env.example). The backend does not load `.env` files by itself — export the variables in your shell or set them in your hosting provider. For the frontend, copy its example to `.env.local` for local development.
+
+## Deploying to Vercel
+
+The backend (Python/FastAPI) and the frontend (Next.js) are deployed as **two Vercel projects from this one repository**. Vercel gives every project a free `<project-name>.vercel.app` address, so no purchased domain is needed.
+
+| Setting            | Backend project                                     | Frontend project                         |
+| ------------------ | --------------------------------------------------- | ---------------------------------------- |
+| Suggested name     | `see-food-api`                                      | `see-food`                               |
+| Root Directory     | `backend`                                           | `frontend`                               |
+| Framework          | FastAPI (detected from `main.py`)                   | Next.js                                  |
+| Free address       | `https://see-food-api.vercel.app`                   | `https://see-food.vercel.app`            |
+| Environment variables | `OPENROUTER_API_KEY`, `ALLOWED_ORIGINS`, `APP_URL` | `NEXT_PUBLIC_API_BASE_URL`               |
+
+If a project name is already taken, Vercel adds a suffix to the address — use whatever address Vercel shows for your project.
+
+**Steps**
+
+1. **Create the backend project** (Vercel dashboard → *Add New…* → *Project* → import this repository → set **Root Directory** to `backend`). Add `OPENROUTER_API_KEY` as an environment variable and deploy. Copy its address.
+2. **Create the frontend project** the same way with Root Directory `frontend`. Set `NEXT_PUBLIC_API_BASE_URL` to the backend address from step 1 and deploy. Copy its address.
+3. **Allow the frontend to call the backend.** On the backend project set `ALLOWED_ORIGINS` and `APP_URL` to the frontend address (no trailing slash), then redeploy the backend. Environment variable changes only apply to new deployments.
+4. **Check it works.** `curl https://<backend-address>/` should return `{"status":"online", …}`; then open the frontend address, pick a photo and click **Analyze Food Plate**.
+
+**Using your own domain later:** in the frontend project open *Settings → Domains* and add it, then update `ALLOWED_ORIGINS` and `APP_URL` on the backend to the new address and redeploy the backend.
+
+**Limits to know about**
+
+- Vercel rejects request bodies over **4.5 MB**. The app shrinks large photos in the browser before uploading (see [Frontend behaviour](#frontend-behaviour)), so normal photos fit.
+- The backend function may run for up to **60 seconds** (`backend/vercel.json`); the call to OpenRouter times out after 45 seconds.
+- The API is public: anyone who finds its address can spend your OpenRouter quota. Consider rate limiting before sharing the link widely (Vercel's firewall offers rate-limiting rules; check what your plan includes).
 
 ## API reference
 
@@ -252,16 +292,17 @@ Errors have the shape `{"detail": "<message>"}`.
 - Choosing a new image clears the previous result and any previous error.
 - A failed request shows a red error box with the server's message (`Server error: …`) or the browser's network error (for example `Failed to fetch` when the backend is not running).
 - The results panel shows the calorie total, model certainty (rounded to a whole percent), protein/carbs/fats cards, the ingredient list and the disclaimer.
+- **Large photos are shrunk in the browser** before upload. Photos up to 1.5 MB are sent unchanged. Larger ones are resized and re-encoded as JPEG, trying smaller settings until they fit under 3.5 MB, which keeps requests below Vercel's 4.5 MB limit. If a photo cannot be made small enough, or its format cannot be read by the browser and it is too big to send as-is, the UI says so instead of uploading.
 
 ## Testing
 
-The project has three layers of tests. **65 tests in total.**
+The project has three layers of tests. **93 tests in total.**
 
 | Layer             | Tool                        | Count | What it covers                                                                                  |
 | ----------------- | --------------------------- | ----- | ----------------------------------------------------------------------------------------------- |
-| Backend           | pytest + FastAPI `TestClient` | 34  | Health check, success path, exact payload sent to OpenRouter, every error path, request validation, CORS, Pydantic schema |
-| Frontend (unit)   | Vitest + React Testing Library | 20 | Rendering, upload and preview, analyze flow, loading state, error states, resetting on new image |
-| End-to-end        | Playwright (Chromium)       | 11    | Real browser → real Next.js app → real FastAPI backend, with only OpenRouter stubbed            |
+| Backend           | pytest + FastAPI `TestClient` | 45  | Health check, success path, exact payload sent to OpenRouter, every error path, request validation, configurable CORS origins, Pydantic schema |
+| Frontend (unit)   | Vitest + React Testing Library | 36 | Rendering, upload and preview, analyze flow, loading state, error states, photo compression logic, backend URL configuration |
+| End-to-end        | Playwright (Chromium)       | 12    | Real browser → real Next.js app → real FastAPI backend, with only OpenRouter stubbed; includes uploading a ~9 MB photo and checking it is shrunk |
 
 ### Backend tests
 
@@ -314,7 +355,9 @@ The end-to-end tests also check that the Tailwind styles are actually applied, s
 | UI error mentions `OpenRouter Gateway Error`         | OpenRouter rejected the call (bad key, rate limit, unavailable model). The upstream status and body are in the message. |
 | UI error mentions `Analysis engine failed`           | The model's reply was not valid JSON for the schema, or the request failed. Try again or try another model. |
 | Page renders without any styling                     | Run `npm install` in `frontend/` (Tailwind and PostCSS must be installed) and restart `npm run dev`. |
-| Browser blocks the request with a CORS error         | Add your frontend origin to `allow_origins` in `backend/main.py`.                    |
+| Browser blocks the request with a CORS error         | The frontend's address is missing from `ALLOWED_ORIGINS` on the backend. Add it (exact address, no trailing slash) and redeploy the backend. |
+| Deployed site calls `localhost:8000`                 | `NEXT_PUBLIC_API_BASE_URL` was not set when the frontend was built. Set it and redeploy the frontend. |
+| UI says the photo is too large                       | The photo could not be shrunk under the upload limit or the server returned HTTP 413. Try a smaller photo or a JPEG/PNG. |
 | E2E tests fail to start with "port already used"     | Stop whatever is using ports 3000, 8000 or 9100.                                     |
 
 ## Known limitations
@@ -323,8 +366,9 @@ These are behaviours of the current code, listed so they are not a surprise:
 
 - **Errors are always HTTP 500.** The analyze handler catches every exception, so an upstream status from OpenRouter (for example 401 or 429) is reported in the message text but the response status is 500.
 - **Strict model output.** The model must return raw JSON matching the schema. Output wrapped in a markdown code fence is rejected, and `estimated_weight_g` must be a whole number (a fractional value such as `150.5` is rejected; `150.0` is accepted).
-- **No upload validation on the server.** The backend does not check file size or confirm the file is an image; the whole file is base64-encoded into a single upstream request.
-- **Hard-coded URLs.** The frontend calls `http://localhost:8000`, and the backend only allows the origin `http://localhost:3000`.
+- **No upload validation on the server.** The backend does not check file size or confirm the file is an image; the whole file is base64-encoded into a single upstream request. (The browser shrinks large photos, but that protects only normal use of the UI, not direct API calls.)
+- **Public, unauthenticated API.** There is no login or rate limiting, so a deployed backend can be called by anyone who knows its address.
+- **Build-time backend URL.** `NEXT_PUBLIC_API_BASE_URL` is baked into the frontend when it is built; changing it needs a redeploy.
 - **Free-tier model.** The default model id is a free-tier option on OpenRouter, which may be rate limited or change availability.
 - **Estimates only.** Portion sizes and nutrition values come from a model looking at a photo and can be significantly off.
 - **Housekeeping.** `pillow` is listed in `requirements.txt` and `io` is imported in `main.py`, but neither is used yet. The page title in `layout.js` is still the Next.js default.
