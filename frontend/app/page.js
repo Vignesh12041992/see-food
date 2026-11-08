@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { Upload, Sparkles, AlertCircle, Apple } from 'lucide-react';
 
 export default function Home() {
-    const = useState(null);
+    const [image, setImage] = useState(null);
     const [preview, setPreview] = useState(null);
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState(null);
